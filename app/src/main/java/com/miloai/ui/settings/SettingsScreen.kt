@@ -700,7 +700,6 @@ private fun SkillsSection(
                             )
                         }
                         TextButton(onClick = {
-                            container.registry.unregisterSkillTools(skill.name)
                             container.skillRepository.delete(skill.name)
                             reloadSkills()
                             scope.launch { snackbar.showSnackbar(context.getString(R.string.settings_skill_deleted, skill.name)) }

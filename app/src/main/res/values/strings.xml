@@ -42,6 +42,7 @@
     <string name="chat_view_image">Lihat gambar</string>
     <string name="chat_remove_att">Hapus</string>
     <string name="chat_error_prefix">Kesalahan: </string>
+    <string name="chat_error_title">Terjadi kesalahan</string>
     <string name="retry">Coba lagi</string>
     <string name="chat_retry">Coba lagi</string>
     <string name="chat_ignore">Tutup</string>
@@ -253,11 +254,12 @@
     <string name="vm_ctx_usage">Penggunaan konteks mencapai %1$d%%, akan dikompres otomatis setelah giliran ini</string>
     <string name="vm_gen_failed">Pembuatan balasan gagal</string>
     <string name="err_image_unsupported">Model ini tidak mendukung gambar. Beralih ke model dengan kemampuan visual, atau ketuk Coba lagi untuk mengirim ulang tanpa gambar</string>
-    <string name="err_401">API key tidak valid atau kedaluwarsa, periksa Pengaturan (HTTP 401)</string>
-    <string name="err_403">API key tidak punya izin untuk sumber daya ini (HTTP 403)</string>
-    <string name="err_404">Model tidak ditemukan atau Base URL salah, periksa konfigurasi Agent (HTTP 404)</string>
+    <string name="err_no_key">API key belum diisi.\n\nBuka Pengaturan → Agent, tempel API key, lalu coba lagi.</string>
+    <string name="err_401">API key tidak valid atau sudah kedaluwarsa.\n\nPeriksa API key di Pengaturan → Agent, pastikan tidak ada spasi atau karakter yang terpotong. (HTTP 401)</string>
+    <string name="err_403">API key tidak punya izin untuk sumber daya ini.\n\nPeriksa hak akses key atau gunakan key lain. (HTTP 403)</string>
+    <string name="err_404">Model tidak ditemukan atau Base URL salah.\n\nPeriksa konfigurasi Agent. (HTTP 404)</string>
     <string name="err_400_reasoning">Model ini tidak mendukung reasoning_effort; matikan Penalaran mendalam di konfigurasi Agent (HTTP 400)</string>
-    <string name="err_429">Dibatasi atau kuota habis, coba lagi nanti (HTTP 429)</string>
+    <string name="err_429">Permintaan dibatasi atau kuota habis.\n\nTunggu sebentar lalu coba lagi. (HTTP 429)</string>
     <string name="err_timeout">Waktu jaringan habis, periksa koneksi lalu coba lagi</string>
     <string name="err_connect">Tidak dapat menjangkau layanan, periksa Base URL dan jaringan</string>
     <string name="err_cancelled">Dibatalkan</string>

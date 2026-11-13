@@ -1,0 +1,224 @@
+package com.miloai.ui.chat
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Matrix
+import android.graphics.pdf.PdfRenderer
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.zip.ZipFile
+
+interface OcrEngine {
+    suspend fun recognize(bitmap: Bitmap): String
+}
+
+object DocParser {
+
+    private const val MAX_OUTPUT_CHARS = 300_000
+    private const val MAX_PDF_PAGES = 5
+    private const val MAX_PDF_BYTES = 20 * 1024 * 1024
+    private const val MAX_RENDER_EDGE = 4096
+    private const val OCR_SCALE = 2f
+
+    suspend fun extractPdf(context: Context, uri: Uri, name: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cacheFile = File(context.cacheDir, "doc_${System.currentTimeMillis()}.pdf")
+                try {
+                    val size = context.contentResolver.query(
+                        uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null
+                    )?.use { c -> if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1 } ?: -1L
+                    if (size > MAX_PDF_BYTES) {
+                        throw IllegalArgumentException("PDF terlalu besar (${size / 1024 / 1024}MB), hanya mendukung berkas hingga 20MB")
+                    }
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        cacheFile.outputStream().use { output -> input.copyTo(output) }
+                    } ?: throw IllegalArgumentException("Tidak dapat membaca berkas PDF")
+                    val pfd = ParcelFileDescriptor.open(cacheFile, ParcelFileDescriptor.MODE_READ_ONLY)
+                    val renderer = PdfRenderer(pfd)
+                    try {
+                        val pageCount = renderer.pageCount
+                        if (pageCount <= 0) throw IllegalArgumentException("PDF tidak memiliki halaman")
+                        val pageLimit = minOf(pageCount, MAX_PDF_PAGES)
+                        val recognizer: OcrEngine = OcrEngineProvider.get()
+                        val sb = StringBuilder()
+                        for (i in 0 until pageLimit) {
+                            renderer.openPage(i).use { page ->
+                                val scale = minOf(
+                                    OCR_SCALE,
+                                    MAX_RENDER_EDGE.toFloat() / maxOf(1, page.width),
+                                    MAX_RENDER_EDGE.toFloat() / maxOf(1, page.height)
+                                )
+                                val width = (page.width * scale).toInt().coerceAtLeast(1)
+                                val height = (page.height * scale).toInt().coerceAtLeast(1)
+                                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                try {
+                                    page.render(
+                                        bitmap, null,
+                                        Matrix().apply { setScale(scale, scale) },
+                                        PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+                                    )
+                                    val text = recognize(recognizer, bitmap)
+                                    sb.appendLine("[Halaman ${i + 1} dari $pageCount]")
+                                    sb.appendLine(text.trim())
+                                } finally {
+                                    bitmap.recycle()
+                                }
+                            }
+                        }
+                        if (pageLimit < pageCount) {
+                            sb.appendLine("\n(Dokumen total $pageCount halaman, hanya $pageLimit halaman pertama yang diproses)")
+                        }
+                        truncate(sb.toString())
+                    } finally {
+                        renderer.close()
+                        pfd.close()
+                    }
+                } finally {
+                    cacheFile.delete()
+                }
+            }
+        }
+
+    suspend fun extractDocx(context: Context, uri: Uri, name: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cacheFile = File(context.cacheDir, "doc_${System.currentTimeMillis()}.docx")
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        cacheFile.outputStream().use { output -> input.copyTo(output) }
+                    } ?: throw IllegalArgumentException("Tidak dapat membaca berkas docx")
+                    ZipFile(cacheFile).use { zip ->
+                        val entry = zip.getEntry("word/document.xml")
+                            ?: throw IllegalArgumentException("Struktur docx tidak wajar: document.xml tidak ada")
+                        val xml = zip.getInputStream(entry).readBytes().toString(Charsets.UTF_8)
+                        val text = xml
+                            .replace(Regex("<w:tab[^>]*/>"), "\t")
+                            .replace(Regex("<w:br[^>]*/>"), "\n")
+                            .replace(Regex("</w:p>"), "\n")
+                            .replace(Regex("<w:t[^>]*>"), "")
+                            .replace(Regex("</w:t>"), "\u0001")
+                            .replace(Regex("<[^>]+>"), "")
+                            .replace("\u0001", "")
+                            .replace(Regex("\\n{3,}"), "\n\n")
+                            .trim()
+                        if (text.isBlank()) throw IllegalArgumentException("Tidak ada teks yang diekstrak dari docx")
+                        truncate(text)
+                    }
+                } finally {
+                    cacheFile.delete()
+                }
+            }
+        }
+
+    suspend fun extractXlsx(context: Context, uri: Uri, name: String): Result<String> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cacheFile = File(context.cacheDir, "doc_${System.currentTimeMillis()}.xlsx")
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        cacheFile.outputStream().use { output -> input.copyTo(output) }
+                    } ?: throw IllegalArgumentException("Tidak dapat membaca berkas xlsx")
+                    ZipFile(cacheFile).use { zip ->
+                        val sharedStrings = parseSharedStrings(zip)
+                        val sheetNames = zip.entries().asSequence()
+                            .map { it.name }
+                            .filter { it.matches(Regex("xl/worksheets/sheet\\d+\\.xml")) }
+                            .sortedBy { it.substringAfterLast("sheet").substringBefore(".xml").toIntOrNull() ?: 0 }
+                            .toList()
+                        val allSheets = mutableListOf<String>()
+                        for ((index, sheetPath) in sheetNames.withIndex()) {
+                            val sheetXml = zip.getInputStream(zip.getEntry(sheetPath))
+                                .readBytes().toString(Charsets.UTF_8)
+                            val rows = mutableListOf<String>()
+                            ROW_REGEX.findAll(sheetXml).forEach { rowMatch ->
+                                val cells = mutableMapOf<Int, String>()
+                                CELL_REGEX.findAll(rowMatch.groupValues[1]).forEach { cellMatch ->
+                                    val colLetters = cellMatch.groupValues[1].ifEmpty { cellMatch.groupValues[4] }
+                                    val type = cellMatch.groupValues[2]
+                                    val body = cellMatch.groupValues[3].ifEmpty { cellMatch.groupValues[5] }
+                                    val value = when {
+                                        type == "s" -> V_REGEX.find(body)
+                                            ?.groupValues?.get(1)?.toIntOrNull()
+                                            ?.let { sharedStrings.getOrNull(it) } ?: ""
+                                        type == "inlineStr" -> IS_REGEX.find(body)
+                                            ?.groupValues?.get(1)
+                                            ?.replace(Regex("<t[^>]*>"), "")
+                                            ?.replace(Regex("</t>"), "")
+                                            ?.replace(Regex("<[^>]+>"), "") ?: ""
+                                        else -> V_REGEX.find(body)
+                                            ?.groupValues?.get(1) ?: ""
+                                    }
+                                    cells[colIndex(colLetters)] = decodeEntities(value)
+                                }
+                                val maxCol = cells.keys.maxOrNull() ?: 0
+                                rows.add((0..maxCol).joinToString("\t") { cells[it] ?: "" })
+                            }
+                            if (rows.isNotEmpty()) {
+                                allSheets.add("[Lembar ${index + 1}]")
+                                allSheets.addAll(rows)
+                            }
+                        }
+                        if (allSheets.isEmpty()) throw IllegalArgumentException("Tidak ada data di xlsx")
+                        truncate(allSheets.joinToString("\n"))
+                    }
+                } finally {
+                    cacheFile.delete()
+                }
+            }
+        }
+
+    private val ROW_REGEX = Regex("<row[^>]*>(.*?)</row>", RegexOption.DOT_MATCHES_ALL)
+    private val CELL_REGEX = Regex(
+        "<c[^>]*r=\"([A-Z]+)\\d+\"[^>]*t=\"([^\"]+)\"[^>]*>(.*?)</c>|<c[^>]*r=\"([A-Z]+)\\d+\"[^>]*>(.*?)</c>",
+        RegexOption.DOT_MATCHES_ALL
+    )
+    private val V_REGEX = Regex("<v>([^<]*)</v>")
+    private val IS_REGEX = Regex("<is>(.*?)</is>", RegexOption.DOT_MATCHES_ALL)
+
+    private fun parseSharedStrings(zip: ZipFile): List<String> {
+        val entry = zip.getEntry("xl/sharedStrings.xml") ?: return emptyList()
+        val xml = zip.getInputStream(entry).readBytes().toString(Charsets.UTF_8)
+        return Regex("<si>(.*?)</si>", RegexOption.DOT_MATCHES_ALL)
+            .findAll(xml)
+            .map { si ->
+                decodeEntities(
+                    si.groupValues[1]
+                        .replace(Regex("<t[^>]*>"), "")
+                        .replace(Regex("</t>"), "")
+                        .replace(Regex("<[^>]+>"), "")
+                        .replace(Regex("\\s+"), " ")
+                        .trim()
+                )
+            }
+            .toList()
+    }
+
+    private fun colIndex(letters: String): Int {
+        var index = 0
+        for (ch in letters) {
+            index = index * 26 + (ch - 'A' + 1)
+        }
+        return index - 1
+    }
+
+    private suspend fun recognize(
+        recognizer: OcrEngine,
+        bitmap: Bitmap
+    ): String = recognizer.recognize(bitmap)
+
+    private fun decodeEntities(text: String): String = text
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+
+    private fun truncate(text: String): String =
+        if (text.length > MAX_OUTPUT_CHARS) {
+            text.take(MAX_OUTPUT_CHARS) + "\n… (isi terlalu panjang, dipotong, total ${text.length} karakter)"
+        } else text
+}

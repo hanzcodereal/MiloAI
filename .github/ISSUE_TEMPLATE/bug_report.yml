@@ -1,0 +1,50 @@
+name: Laporan bug
+description: Laporkan bug atau perilaku tak terduga
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: Perangkat & versi Android
+      placeholder: mis. Xiaomi 14, HyperOS 2.0 (Android 15)
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Versi aplikasi & build
+      placeholder: mis. v1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Penyedia
+      options:
+        - Kompatibel OpenAI
+        - Anthropic Claude
+        - Google Gemini
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Apa yang terjadi?
+      description: Apa yang kamu harapkan, dan apa yang sebenarnya terjadi?
+      placeholder: mis. Setelah kirim pesan tidak ada balasan
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Langkah untuk mereproduksi
+      placeholder: |
+        1. Buka Pengaturan → Penyedia & Model
+        2. ...
+        3. ...
+  - type: textarea
+    id: error
+    attributes:
+      label: Pesan kesalahan / log
+      description: Teks kesalahan di layar (mis. "Kesalahan: …"), atau baris logcat bila ada

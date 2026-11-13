@@ -1,0 +1,143 @@
+package com.miloai.core.chat
+
+import androidx.room.withTransaction
+import com.miloai.core.db.AppDatabase
+import com.miloai.core.db.ConversationEntity
+import com.miloai.core.db.MessageEntity
+import com.miloai.core.mode.AppMode
+import com.miloai.core.model.Attachment
+import com.miloai.core.model.ChatMessage
+import com.miloai.core.model.ChatRole
+import com.miloai.core.model.ProviderId
+import com.miloai.core.model.ToolCall
+import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+
+class ChatRepository(private val db: AppDatabase) {
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    fun observeConversations(): Flow<List<ConversationEntity>> = db.conversationDao().observeAll()
+
+    fun observeActiveConversations(): Flow<List<ConversationEntity>> = db.conversationDao().observeActive()
+
+    fun observeArchivedConversations(): Flow<List<ConversationEntity>> = db.conversationDao().observeArchived()
+
+    fun observeConversation(id: Long): Flow<ConversationEntity?> = db.conversationDao().observeById(id)
+
+    fun observeMessages(conversationId: Long): Flow<List<MessageEntity>> = db.messageDao().observeForConversation(conversationId)
+
+    fun observeStarred(): Flow<List<MessageEntity>> = db.messageDao().observeStarred()
+
+    fun observeLastMessages(): Flow<List<com.miloai.core.db.LastMessageRow>> =
+        db.messageDao().observeLastMessages()
+
+    suspend fun setStarred(id: Long, starred: Boolean) = db.messageDao().updateStarred(id, starred)
+
+    suspend fun createConversation(
+        provider: ProviderId,
+        model: String,
+        mode: AppMode,
+        defaultTitle: String = "New Chat",
+        agentId: Long? = null
+    ): Long =
+        db.conversationDao().insert(
+            ConversationEntity(
+                title = defaultTitle,
+                provider = provider.name,
+                model = model,
+                mode = mode.name,
+                agentId = agentId,
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+
+    suspend fun getConversation(id: Long): ConversationEntity? = db.conversationDao().getById(id)
+
+    suspend fun deleteConversation(id: Long) = db.withTransaction {
+        db.conversationDao().deleteMessages(id)
+        db.memoryDao().deleteForConversation(id)
+        db.conversationDao().deleteById(id)
+    }
+
+    suspend fun updateTitle(id: Long, title: String) {
+        val c = db.conversationDao().getById(id) ?: return
+        db.conversationDao().update(c.copy(title = title, updatedAt = System.currentTimeMillis()))
+    }
+
+    suspend fun updateMeta(id: Long, model: String, mode: AppMode, agentId: Long? = null) {
+        val c = db.conversationDao().getById(id) ?: return
+        db.conversationDao().update(
+            c.copy(model = model, mode = mode.name, agentId = agentId ?: c.agentId, updatedAt = System.currentTimeMillis())
+        )
+    }
+
+    suspend fun setPinned(id: Long, pinned: Boolean) = db.conversationDao().updatePinned(id, pinned)
+
+    suspend fun setArchived(id: Long, archived: Boolean) = db.conversationDao().updateArchived(id, archived)
+
+    suspend fun deleteMessagesFrom(conversationId: Long, fromId: Long) =
+        db.messageDao().deleteFrom(conversationId, fromId)
+
+    suspend fun searchByContent(query: String): List<Long> =
+        db.messageDao().searchConversationsByContent(query)
+
+    suspend fun deleteMessagesRange(conversationId: Long, fromId: Long, toId: Long) =
+        db.messageDao().deleteRange(conversationId, fromId, toId)
+
+    suspend fun insertMessage(entity: MessageEntity): Long = db.messageDao().insert(entity)
+
+    suspend fun updateMessage(entity: MessageEntity) = db.messageDao().update(entity)
+
+    suspend fun updateMessageContent(id: Long, content: String) = db.messageDao().updateContent(id, content)
+
+    suspend fun getHistory(conversationId: Long): List<MessageEntity> = db.messageDao().getForConversation(conversationId)
+
+    suspend fun clearMessages(conversationId: Long) = db.messageDao().deleteAllForConversation(conversationId)
+
+    suspend fun deleteMessage(id: Long) = db.messageDao().deleteById(id)
+
+    suspend fun deleteToolMessages(conversationId: Long, toolCallIds: List<String>) {
+        if (toolCallIds.isEmpty()) return
+        db.messageDao().deleteByToolCallIds(conversationId, toolCallIds)
+    }
+
+    fun messageToDomain(e: MessageEntity): ChatMessage = ChatMessage(
+        role = runCatching { ChatRole.valueOf(e.role) }.getOrDefault(ChatRole.USER),
+        content = e.content,
+        toolCalls = e.toolCallsJson?.let {
+            runCatching { json.decodeFromString<List<ToolCall>>(it) }.getOrDefault(emptyList())
+        } ?: emptyList(),
+        toolCallId = e.toolCallId,
+        toolName = e.toolName,
+        model = e.model,
+        mode = e.mode?.let { runCatching { AppMode.valueOf(it) }.getOrNull() },
+        attachments = e.attachmentsJson?.let {
+            runCatching { json.decodeFromString<List<Attachment>>(it) }.getOrDefault(emptyList())
+        } ?: emptyList(),
+        thinkingText = e.thinkingText,
+        thinkingSignature = e.thinkingSignature
+    )
+
+    fun domainToMessage(m: ChatMessage, conversationId: Long, status: String = "done"): MessageEntity = MessageEntity(
+        conversationId = conversationId,
+        role = m.role.name,
+        content = m.content,
+        toolCallsJson = m.toolCalls.takeIf { it.isNotEmpty() }
+            ?.let { json.encodeToString(ListSerializer(ToolCall.serializer()), it) },
+        toolCallId = m.toolCallId,
+        toolName = m.toolName,
+        model = m.model,
+        mode = m.mode?.name,
+        status = status,
+        usageInput = 0,
+        usageOutput = 0,
+        attachmentsJson = m.attachments.takeIf { it.isNotEmpty() }
+            ?.let { json.encodeToString(ListSerializer(Attachment.serializer()), it) },
+        thinkingText = m.thinkingText,
+        thinkingSignature = m.thinkingSignature,
+        createdAt = System.currentTimeMillis()
+    )
+}

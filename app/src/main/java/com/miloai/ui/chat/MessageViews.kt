@@ -1,0 +1,863 @@
+package com.miloai.ui.chat
+
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.miloai.core.model.ChatRole
+import com.miloai.core.model.ToolCall
+import com.miloai.core.model.ToolCallStatus
+import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private val TIME_FORMAT = SimpleDateFormat("HH:mm", Locale.getDefault())
+
+
+
+
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MessageItem(
+    msg: UiMessage,
+    modifier: Modifier = Modifier,
+    onDelete: (Long) -> Unit,
+    onSpeak: (String) -> Unit = {},
+    onEdit: (Long) -> Unit = {},
+    onOpenLink: (String) -> Unit = {},
+    onToggleStar: (Long) -> Unit = {},
+    onCopied: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onViewImage: ((String) -> Unit)? = null
+) {
+    if (msg.role == ChatRole.TOOL) return
+    val clipboard = LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var showActions by remember { mutableStateOf(false) }
+    val copyAction = {
+        if (msg.content.isNotBlank()) {
+            clipboard.setText(AnnotatedString(msg.content))
+            onCopied?.invoke()
+        }
+        showActions = false
+    }
+    val onLongPress = {
+        if (msg.id > 0 && !msg.streaming) {
+            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            showActions = true
+        }
+    }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    if (msg.role == ChatRole.USER) {
+        Column(modifier = modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+            UserBubble(msg, onLongPress, onViewImage = onViewImage)
+            QuickActionBar(
+                visible = showActions,
+                alignment = Alignment.CenterEnd,
+                onCopy = copyAction,
+                onSpeak = { showActions = false; onSpeak(msg.content) },
+                onStar = { showActions = false; onToggleStar(msg.id) },
+                onDelete = { showActions = false; showDeleteConfirm = true }
+            )
+        }
+        if (showDeleteConfirm) {
+            MessageActionsDialog(
+                content = msg.content,
+                starred = msg.starred,
+                onCopy = copyAction,
+                onSpeak = { onSpeak(msg.content) },
+                onStar = {
+                    showDeleteConfirm = false
+                    onToggleStar(msg.id)
+                },
+                onEdit = {
+                    showDeleteConfirm = false
+                    onEdit(msg.id)
+                },
+                onDelete = {
+                    showDeleteConfirm = false
+                    onDelete(msg.id)
+                },
+                onDismiss = { showDeleteConfirm = false }
+            )
+        }
+        return
+    }
+    Column(modifier = modifier.fillMaxWidth()) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        AiAvatar()
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    buildString {
+                        msg.model?.let { append(it) }
+                        msg.mode?.let { m ->
+                            if (isNotEmpty()) append(" · ")
+                            append(m.displayName)
+                        }
+                        if (isEmpty()) append("Milo AI")
+                        if (msg.createdAt > 0) {
+                            append(" · ")
+                            append(TIME_FORMAT.format(Date(msg.createdAt)))
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (msg.thinking.isNotBlank()) {
+                Spacer(Modifier.size(6.dp))
+                ThinkingCard(msg.thinking)
+            }
+            Spacer(Modifier.size(4.dp))
+            if (msg.content.isNotEmpty() || msg.toolCalls.isEmpty()) {
+                Surface(
+                shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .widthIn(max = 480.dp)
+                    .combinedClickable(onClick = {}, onLongClick = onLongPress)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    if (msg.streaming && msg.content.isEmpty()) {
+                        ThinkingDots()
+                    } else {
+                        val blinkAlpha = if (msg.streaming) {
+                            val transition = rememberInfiniteTransition(label = "cursor")
+                            transition.animateFloat(
+                                initialValue = 0.7f,
+                                targetValue = 1f,
+                                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+                                label = "cursorAlpha"
+                            ).value
+                        } else 1f
+                        Box(modifier = Modifier.alpha(blinkAlpha)) {
+                            Markdown(
+                                com.miloai.core.chat.MarkdownNormalizer.normalize(
+                                com.miloai.core.chat.MarkdownNormalizer.stripCodeBlocks(msg.content)
+                            ),
+                                modifier = Modifier.fillMaxWidth(),
+                                typography = markdownTypography(
+                                    h1 = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 18.sp,
+                                        lineHeight = 24.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    h2 = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 16.sp,
+                                        lineHeight = 22.sp,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    h3 = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 15.sp,
+                                        lineHeight = 21.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    h4 = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    h5 = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 13.sp,
+                                        lineHeight = 19.sp,
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    h6 = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 13.sp,
+                                        lineHeight = 19.sp,
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    text = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp
+                                    ),
+                                    paragraph = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp
+                                    ),
+                                    bullet = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp
+                                    ),
+                                    ordered = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp
+                                    ),
+                                    list = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 14.sp,
+                                        lineHeight = 20.sp
+                                    ),
+                                    quote = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 13.sp,
+                                        lineHeight = 19.sp
+                                    ),
+                                    code = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 12.sp,
+                                        lineHeight = 18.sp
+                                    ),
+                                    inlineCode = androidx.compose.ui.text.TextStyle(
+                                        fontSize = 13.sp,
+                                        lineHeight = 19.sp
+                                    )
+                                ),
+                                components = markdownComponents(
+                                    table = { model ->
+                                        MarkdownTable(model.content)
+                                    }
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            }
+            msg.toolCalls.forEachIndexed { index, call ->
+                Spacer(Modifier.size(6.dp))
+                ToolCallCard(call, stepNumber = index + 1)
+            }
+            if (msg.streaming && msg.toolCalls.isNotEmpty()) {
+                val done = msg.toolCalls.count {
+                    it.status == ToolCallStatus.DONE || it.status == ToolCallStatus.FAILED
+                }
+                val running = msg.toolCalls.count { it.status == ToolCallStatus.RUNNING }
+                Spacer(Modifier.size(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                ) {
+                    Text(
+                        stringResource(com.miloai.R.string.tool_steps, done, msg.toolCalls.size, if (running > 0) " · " + stringResource(com.miloai.R.string.status_running) else ""),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            val codeBlocks = com.miloai.core.chat.MarkdownNormalizer.extractCodeBlocks(msg.content)
+            if (codeBlocks.isNotEmpty() && !msg.streaming) {
+                codeBlocks.forEach { code ->
+                    Spacer(Modifier.size(6.dp))
+                    HighlightedCodeCard(
+                        code = code,
+                        onCopy = {
+                            clipboard.setText(AnnotatedString(code))
+                            onCopied?.invoke()
+                        }
+                    )
+                }
+            }
+            val links = com.miloai.core.chat.MarkdownNormalizer.extractLinks(msg.content)
+            if (links.isNotEmpty() && !msg.streaming) {
+                Spacer(Modifier.size(4.dp))
+                links.take(3).forEach { link ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        onClick = { onOpenLink(link) }
+                    ) {
+                        Text(
+                            stringResource(com.miloai.R.string.chat_open_link, link.take(40)),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+    QuickActionBar(
+        visible = showActions,
+        alignment = Alignment.CenterStart,
+        onCopy = copyAction,
+        onSpeak = { showActions = false; onSpeak(msg.content) },
+        onStar = { showActions = false; onToggleStar(msg.id) },
+        onDelete = { showActions = false; showDeleteConfirm = true }
+    )
+    if (showDeleteConfirm) {
+        MessageActionsDialog(
+            content = msg.content,
+            starred = msg.starred,
+            onCopy = copyAction,
+            onSpeak = { onSpeak(msg.content) },
+            onStar = {
+                showDeleteConfirm = false
+                onToggleStar(msg.id)
+            },
+            onEdit = null,
+            onDelete = {
+                showDeleteConfirm = false
+                onDelete(msg.id)
+            },
+            onDismiss = { showDeleteConfirm = false }
+        )
+    }
+    }
+}
+
+@Composable
+private fun MessageActionsDialog(
+    content: String,
+    starred: Boolean,
+    onCopy: () -> Unit,
+    onSpeak: () -> Unit,
+    onStar: () -> Unit,
+    onEdit: (() -> Unit)?,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(com.miloai.R.string.msg_actions)) },
+        text = {
+            Text(
+                content.take(120) + if (content.length > 120) "…" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onCopy) { Text(stringResource(com.miloai.R.string.chat_copy)) }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onSpeak) { Text(stringResource(com.miloai.R.string.chat_speak)) }
+                TextButton(onClick = onStar) { Text(stringResource(if (starred) com.miloai.R.string.chat_unstar else com.miloai.R.string.chat_star)) }
+                if (onEdit != null) {
+                    TextButton(onClick = onEdit) { Text(stringResource(com.miloai.R.string.chat_edit)) }
+                }
+                TextButton(onClick = onDismiss) { Text(stringResource(com.miloai.R.string.cancel)) }
+                TextButton(onClick = onDelete) {
+                    Text(stringResource(com.miloai.R.string.chat_delete), color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ThinkingCard(thinking: String) {
+    var expanded by remember { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = { expanded = !expanded }, onLongClick = { })
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(com.miloai.R.string.thinking_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    stringResource(if (expanded) com.miloai.R.string.chat_collapse else com.miloai.R.string.thinking_expand),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (expanded) {
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    thinking,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Default,
+                    maxLines = 200
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun UserBubble(
+    msg: UiMessage,
+    onLongPress: () -> Unit,
+    modifier: Modifier = Modifier,
+    onViewImage: ((String) -> Unit)? = null
+) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Column(horizontalAlignment = Alignment.End) {
+            Surface(
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomEnd = 16.dp, bottomStart = 16.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier
+                    .widthIn(max = 480.dp)
+                    .combinedClickable(onClick = {}, onLongClick = onLongPress)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    if (msg.attachments.isNotEmpty()) {
+                        msg.attachments.forEach { att ->
+                            if (att.isImage && att.dataBase64.isNotBlank()) {
+                                val bitmap = remember(att.dataBase64) {
+                                    runCatching {
+                                        val bytes = android.util.Base64.decode(att.dataBase64, android.util.Base64.DEFAULT)
+                                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    }.getOrNull()
+                                }
+                                if (bitmap != null) {
+                                    Image(
+                                        bitmap = bitmap.asImageBitmap(),
+                                        contentDescription = att.name,
+                                        modifier = Modifier
+                                            .fillMaxWidth(0.6f)
+                                            .height((140 * bitmap.width / bitmap.height.toFloat()).dp)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .combinedClickable(onClick = {
+                                                onViewImage?.invoke(att.dataBase64)
+                                            }, onLongClick = {})
+                                    )
+                                    Spacer(Modifier.size(4.dp))
+                                }
+                            } else {
+                                Text(
+                                    if (att.isImage) stringResource(com.miloai.R.string.chat_image_att, att.name) else stringResource(com.miloai.R.string.chat_file_att, att.name),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Spacer(Modifier.size(4.dp))
+                    }
+                    Text(
+                        msg.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            if (msg.createdAt > 0) {
+                Text(
+                    TIME_FORMAT.format(Date(msg.createdAt)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp, end = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AiAvatar() {
+    Box(
+        modifier = Modifier
+            .size(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    "AI",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCallCard(call: ToolCall, stepNumber: Int = 0) {
+    var detail by remember(call.id) { mutableStateOf(false) }
+    var resultExpanded by remember(call.id) { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Build,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                if (stepNumber > 0) {
+                    Text(
+                        "$stepNumber.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
+                Text(
+                    call.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                StatusBadge(call.status)
+                TextButton(
+                    onClick = { detail = !detail },
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                    modifier = Modifier.height(28.dp)
+                ) {
+                    Text(
+                        stringResource(
+                            if (detail) com.miloai.R.string.chat_collapse
+                            else com.miloai.R.string.chat_details
+                        ),
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
+            if (detail) {
+                if (call.arguments.isNotBlank() && call.arguments != "{}") {
+                    Text(
+                        call.arguments,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                val result = call.result
+                if (!result.isNullOrBlank()) {
+                    Spacer(Modifier.size(4.dp))
+                    Text(
+                        result,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = if (resultExpanded) Int.MAX_VALUE else 8,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (result.length > 180 && !resultExpanded) {
+                        TextButton(
+                            onClick = { resultExpanded = true },
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Text(stringResource(com.miloai.R.string.chat_expand_all, result.length), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    if (resultExpanded) {
+                        TextButton(
+                            onClick = { resultExpanded = false },
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Text(stringResource(com.miloai.R.string.chat_collapse), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+                Spacer(Modifier.size(4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusBadge(status: ToolCallStatus) {
+    val (text, target) = when (status) {
+        ToolCallStatus.PENDING -> stringResource(com.miloai.R.string.status_waiting) to MaterialTheme.colorScheme.onSurfaceVariant
+        ToolCallStatus.RUNNING -> stringResource(com.miloai.R.string.status_running) to MaterialTheme.colorScheme.primary
+        ToolCallStatus.DONE -> stringResource(com.miloai.R.string.status_done) to Color(0xFF2E7D32)
+        ToolCallStatus.FAILED -> stringResource(com.miloai.R.string.status_failed) to MaterialTheme.colorScheme.error
+        ToolCallStatus.REJECTED -> stringResource(com.miloai.R.string.status_rejected) to MaterialTheme.colorScheme.error
+        ToolCallStatus.DENIED -> stringResource(com.miloai.R.string.status_denied) to MaterialTheme.colorScheme.error
+    }
+    val color by androidx.compose.animation.animateColorAsState(
+        targetValue = target,
+        animationSpec = androidx.compose.animation.core.tween(250),
+        label = "status"
+    )
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = color.copy(alpha = 0.12f)
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = color
+        )
+    }
+}
+
+
+@Composable
+private fun HighlightedCodeCard(code: String, onCopy: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = androidx.compose.ui.graphics.Color(0xFF1E1E1E),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(com.miloai.R.string.chat_code),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF9CDCFE)
+                )
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onCopy) {
+                    Text(stringResource(com.miloai.R.string.chat_copy), color = Color(0xFF9CDCFE))
+                }
+            }
+            Text(
+                MiniHighlighter.highlight(code),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 30,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun cellText(
+    raw: String,
+    bold: Boolean,
+    color: androidx.compose.ui.graphics.Color
+): androidx.compose.ui.text.AnnotatedString {
+    return androidx.compose.ui.text.buildAnnotatedString {
+        var i = 0
+        val text = raw
+        while (i < text.length) {
+            when {
+                text.startsWith("**", i) -> {
+                    val close = text.indexOf("**", i + 2)
+                    if (close > i + 2) {
+                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(text.substring(i + 2, close))
+                        }
+                        i = close + 2
+                    } else {
+                        append("**")
+                        i += 2
+                    }
+                }
+                text[i] == '`' -> {
+                    val close = text.indexOf('`', i + 1)
+                    if (close > i + 1) {
+                        withStyle(
+                            androidx.compose.ui.text.SpanStyle(
+                                fontFamily = FontFamily.Monospace,
+                                background = color.copy(alpha = 0.12f)
+                            )
+                        ) {
+                            append(text.substring(i + 1, close))
+                        }
+                        i = close + 1
+                    } else {
+                        append('`')
+                        i += 1
+                    }
+                }
+                else -> {
+                    append(text[i])
+                    i += 1
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTable(md: String, modifier: Modifier = Modifier) {
+    val data = remember(md) {
+        com.miloai.core.chat.MarkdownNormalizer.parseTable(md)
+    } ?: return
+    val columnCount = data.headers.size
+    if (columnCount == 0) return
+    val shape = RoundedCornerShape(10.dp)
+    val borderColor = MaterialTheme.colorScheme.outlineVariant
+    val wide = columnCount > 3
+    val cellColor = MaterialTheme.colorScheme.onSurface
+
+    fun textAlign(a: com.miloai.core.chat.MarkdownNormalizer.TableAlign) = when (a) {
+        com.miloai.core.chat.MarkdownNormalizer.TableAlign.CENTER -> androidx.compose.ui.text.style.TextAlign.Center
+        com.miloai.core.chat.MarkdownNormalizer.TableAlign.END -> androidx.compose.ui.text.style.TextAlign.End
+        else -> androidx.compose.ui.text.style.TextAlign.Start
+    }
+
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .border(1.dp, borderColor, shape)
+            .background(MaterialTheme.colorScheme.surface)
+            .then(if (wide) Modifier.horizontalScroll(rememberScrollState()) else Modifier.fillMaxWidth())
+    ) {
+        @Composable
+        fun tableRow(cells: List<String>, isHeader: Boolean, isEven: Boolean) {
+            Row(
+                modifier = Modifier
+                    .then(if (wide) Modifier.width((columnCount * 116).dp) else Modifier.fillMaxWidth())
+                    .background(
+                        when {
+                            isHeader -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                            isEven -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f)
+                            else -> Color.Transparent
+                        }
+                    )
+            ) {
+                cells.forEachIndexed { ci, cell ->
+                    if (ci > 0) {
+                        VerticalDivider(color = borderColor.copy(alpha = 0.6f))
+                    }
+                    Text(
+                        cellText(cell, isHeader, cellColor),
+                        modifier = Modifier
+                            .then(if (wide) Modifier.width(116.dp) else Modifier.weight(1f))
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        textAlign = textAlign(data.alignments.getOrNull(ci) ?: com.miloai.core.chat.MarkdownNormalizer.TableAlign.START),
+                        color = cellColor,
+                        maxLines = 20,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+        tableRow(data.headers, isHeader = true, isEven = false)
+        data.rows.forEachIndexed { ri, row ->
+            HorizontalDivider(color = borderColor.copy(alpha = 0.6f))
+            tableRow(row, isHeader = false, isEven = ri % 2 == 1)
+        }
+    }
+}
+
+@Composable
+private fun ThinkingDots() {
+    val transition = rememberInfiniteTransition(label = "thinking")
+    val delays = listOf(0, 180, 360)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        delays.forEach { delayMs ->
+            val alpha by transition.animateFloat(
+                initialValue = 0.25f,
+                targetValue = 1f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(500),
+                    repeatMode = RepeatMode.Reverse,
+                    initialStartOffset = androidx.compose.animation.core.StartOffset(delayMs)
+                ),
+                label = "dot"
+            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(7.dp)
+                    .alpha(alpha)
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant)
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        Text(stringResource(com.miloai.R.string.chat_thinking), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun QuickActionBar(
+    visible: Boolean,
+    alignment: Alignment,
+    onCopy: () -> Unit,
+    onSpeak: () -> Unit,
+    onStar: () -> Unit,
+    onDelete: () -> Unit
+) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.85f),
+        exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.85f)
+    ) {
+        Box(modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shadowElevation = 3.dp,
+            modifier = Modifier.align(alignment)
+        ) {
+            Row(modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) {
+                TextButton(onClick = onCopy, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(stringResource(com.miloai.R.string.chat_copy), style = MaterialTheme.typography.labelMedium)
+                }
+                TextButton(onClick = onSpeak, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(stringResource(com.miloai.R.string.chat_speak), style = MaterialTheme.typography.labelMedium)
+                }
+                TextButton(onClick = onStar, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(stringResource(com.miloai.R.string.chat_star), style = MaterialTheme.typography.labelMedium)
+                }
+                TextButton(onClick = onDelete, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(stringResource(com.miloai.R.string.chat_delete), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        }
+    }
+}

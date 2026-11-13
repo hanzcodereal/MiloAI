@@ -855,20 +855,13 @@ private fun WelcomePanel(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(72.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    "AI",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(R.drawable.milo_logo),
+            contentDescription = "Milo AI",
+            modifier = Modifier
+                .size(72.dp)
+                .clip(RoundedCornerShape(16.dp))
+        )
         Spacer(Modifier.size(16.dp))
         Text("Milo AI", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Spacer(Modifier.size(8.dp))

@@ -1,0 +1,17 @@
+name: Permintaan fitur
+description: Usulkan peningkatan atau fitur baru
+title: "[Fitur] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Apa yang kamu inginkan?
+      description: Jelaskan fitur tersebut dan mengapa berguna
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Contoh penggunaan
+      placeholder: mis. "minta AI mengatur jadwal Jangan Ganggu untuk akhir pekan"

@@ -1,0 +1,54 @@
+name: Build Release APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      KEYSTORE_B64: ${{ secrets.MILO_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Pasang paket SDK
+        run: |
+          echo y | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Siapkan keystore (opsional)
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/milo.keystore"
+          echo "MILO_KEYSTORE=$RUNNER_TEMP/milo.keystore" >> "$GITHUB_ENV"
+          echo "MILO_KEYSTORE_PASSWORD=${{ secrets.MILO_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "MILO_KEY_ALIAS=${{ secrets.MILO_KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "MILO_KEY_PASSWORD=${{ secrets.MILO_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      - name: Beri izin eksekusi gradlew
+        run: chmod +x gradlew
+
+      - name: Build APK release
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Checksum SHA-256
+        run: |
+          cd app/build/outputs/apk/release
+          for f in *.apk; do mv "$f" "MiloAI-1.0.0.apk"; done
+          sha256sum MiloAI-1.0.0.apk | tee MiloAI-1.0.0.apk.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MiloAI-1.0.0-release
+          path: |
+            app/build/outputs/apk/release/MiloAI-1.0.0.apk
+            app/build/outputs/apk/release/MiloAI-1.0.0.apk.sha256

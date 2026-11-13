@@ -400,6 +400,7 @@ class ChatViewModel(
     }
 
     private fun newStreamingMessage(config: com.miloai.core.model.ProviderConfig, s: ChatUiState): UiMessage {
+        revealBuffer.setLength(0)
         streamingRound = roundCounter
         return UiMessage(
             id = -1, role = ChatRole.ASSISTANT, content = "",
@@ -410,6 +411,30 @@ class ChatViewModel(
     private var autoDistillCount = 0
     private var needAutoCompress = false
 
+    // Efek mengetik: teks dari AI ditampung dulu, lalu ditampilkan sedikit demi sedikit
+    private val revealBuffer = StringBuilder()
+
+    private fun revealStep() {
+        if (revealBuffer.isEmpty()) return
+        val backlog = revealBuffer.length
+        // Kecepatan stabil seperti mengetik; hanya sedikit mempercepat jika antrean sangat panjang
+        val n = minOf(backlog, 2 + (backlog / 80).coerceAtMost(10))
+        val chunk = revealBuffer.substring(0, n)
+        revealBuffer.delete(0, n)
+        streaming = streaming?.copy(content = (streaming?.content ?: "") + chunk)
+    }
+
+    private fun flushReveal() {
+        if (revealBuffer.isEmpty()) return
+        val rest = revealBuffer.toString()
+        revealBuffer.setLength(0)
+        streaming = streaming?.copy(content = (streaming?.content ?: "") + rest)
+    }
+
+    private suspend fun drainReveal(token: Int) {
+        while (revealBuffer.isNotEmpty() && token == runToken) delay(20)
+    }
+
     private fun runGeneration(cid: Long) {
         if (runJob?.isActive == true) return
         _state.update { it.copy(isRunning = true, toolCallCount = 0) }
@@ -419,14 +444,23 @@ class ChatViewModel(
         currentJob = viewModelScope.launch {
             val s = _state.value
             val config = resolveConfig(s)
+            if (config.apiKey.isBlank() && !isLocalEndpoint(config.baseUrl)) {
+                _state.update {
+                    it.copy(error = appContext.getString(com.miloai.R.string.err_no_key), isRunning = false)
+                }
+                return@launch
+            }
             streaming = newStreamingMessage(config, s)
             refresh()
             var myTicker: Job? = null
             try {
                 myTicker = viewModelScope.launch {
                     while (true) {
-                        delay(100)
-                        if (streaming != null) refresh()
+                        delay(30)
+                        if (streaming != null) {
+                            revealStep()
+                            refresh()
+                        }
                     }
                 }
                 streamTickerJob = myTicker
@@ -446,7 +480,7 @@ class ChatViewModel(
                             if (streaming == null) {
                                 streaming = newStreamingMessage(config, s)
                             }
-                            streaming = streaming?.copy(content = (streaming?.content ?: "") + ev.text)
+                            revealBuffer.append(ev.text)
                         }
                         is EngineEvent.ThinkingDelta -> {
                             if (streaming == null) {
@@ -491,6 +525,8 @@ class ChatViewModel(
                             }
                         }
                         is EngineEvent.AssistantFinished -> {
+                            drainReveal(myToken)
+                            if (myToken != runToken) return@collect
                             val msg = ev.message
                             val entity = repository.domainToMessage(
                                 ChatMessage(
@@ -522,6 +558,7 @@ class ChatViewModel(
                         }
                         is EngineEvent.Failed -> {
                             _state.update { it.copy(error = smartError(ev.message)) }
+                            flushReveal()
                             persistStreamingPartial(cid)
                             streaming = null
                             refresh()
@@ -548,6 +585,7 @@ class ChatViewModel(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
+                revealBuffer.setLength(0)
                 streaming = null
                 _state.update { it.copy(error = smartError(e.message ?: appContext.getString(com.miloai.R.string.vm_gen_failed))) }
                 refresh()
@@ -569,9 +607,26 @@ class ChatViewModel(
         runJob = currentJob
     }
 
+    private fun isLocalEndpoint(url: String): Boolean {
+        val u = url.lowercase()
+        return u.contains("localhost") || u.contains("127.0.0.1") || u.contains("10.0.2.2") ||
+            u.contains("//192.168.") || u.contains("//10.") || u.contains("//172.")
+    }
+
     private fun smartError(raw: String): String {
         val str = { id: Int -> appContext.getString(id) }
         return when {
+            raw.contains("api key not valid", ignoreCase = true) ||
+                raw.contains("api_key_invalid", ignoreCase = true) ||
+                raw.contains("invalid_api_key", ignoreCase = true) ||
+                raw.contains("incorrect api key", ignoreCase = true) ||
+                raw.contains("invalid api key", ignoreCase = true) ||
+                raw.contains("invalid x-api-key", ignoreCase = true) ||
+                raw.contains("unauthorized", ignoreCase = true) ->
+                str(com.miloai.R.string.err_401)
+            raw.contains("insufficient_quota", ignoreCase = true) ||
+                raw.contains("quota", ignoreCase = true) && !raw.contains("429") ->
+                str(com.miloai.R.string.err_429)
             raw.contains("image", ignoreCase = true) &&
                 (raw.contains("not support", ignoreCase = true) ||
                     raw.contains("unsupported", ignoreCase = true) ||
@@ -669,6 +724,7 @@ class ChatViewModel(
         streamTickerJob?.cancel()
         streamTickerJob = null
         _state.update { it.copy(confirmRequest = null, isRunning = false) }
+        flushReveal()
         viewModelScope.launch {
             failPendingToolCalls()
             persistStreamingPartial(currentConversationId)

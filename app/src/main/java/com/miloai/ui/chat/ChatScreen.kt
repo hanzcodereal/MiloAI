@@ -543,24 +543,40 @@ fun ChatScreen(conversationId: Long, onBack: () -> Unit) {
                 state.error?.let { error ->
                     item {
                         Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.errorContainer
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(
-                                modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                            Column(modifier = Modifier.padding(start = 14.dp, top = 12.dp, bottom = 4.dp, end = 8.dp)) {
                                 Text(
-                                    stringResource(com.miloai.R.string.chat_error_prefix) + error,
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodySmall,
+                                    stringResource(com.miloai.R.string.chat_error_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
-                                TextButton(onClick = { vm.retryLast() }) {
-                                    Text(stringResource(com.miloai.R.string.chat_retry), color = MaterialTheme.colorScheme.onErrorContainer)
-                                }
-                                TextButton(onClick = { vm.dismissError() }) {
-                                    Text(stringResource(com.miloai.R.string.chat_ignore), color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f))
+                                Spacer(Modifier.size(4.dp))
+                                Text(
+                                    error,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    TextButton(onClick = { vm.dismissError() }) {
+                                        Text(
+                                            stringResource(com.miloai.R.string.chat_ignore),
+                                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                    TextButton(onClick = { vm.retryLast() }) {
+                                        Text(
+                                            stringResource(com.miloai.R.string.chat_retry),
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }

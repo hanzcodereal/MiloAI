@@ -175,20 +175,11 @@ fun MessageItem(
                     .widthIn(max = 480.dp)
                     .combinedClickable(onClick = {}, onLongClick = onLongPress)
             ) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     if (msg.streaming && msg.content.isEmpty()) {
                         ThinkingDots()
                     } else {
-                        val blinkAlpha = if (msg.streaming) {
-                            val transition = rememberInfiniteTransition(label = "cursor")
-                            transition.animateFloat(
-                                initialValue = 0.7f,
-                                targetValue = 1f,
-                                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-                                label = "cursorAlpha"
-                            ).value
-                        } else 1f
-                        Box(modifier = Modifier.alpha(blinkAlpha)) {
+                        Box {
                             Markdown(
                                 com.miloai.core.chat.MarkdownNormalizer.normalize(
                                 com.miloai.core.chat.MarkdownNormalizer.stripCodeBlocks(msg.content)
@@ -226,24 +217,24 @@ fun MessageItem(
                                         fontWeight = FontWeight.Medium
                                     ),
                                     text = androidx.compose.ui.text.TextStyle(
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp
+                                        fontSize = 15.sp,
+                                        lineHeight = 23.sp
                                     ),
                                     paragraph = androidx.compose.ui.text.TextStyle(
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp
+                                        fontSize = 15.sp,
+                                        lineHeight = 23.sp
                                     ),
                                     bullet = androidx.compose.ui.text.TextStyle(
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp
+                                        fontSize = 15.sp,
+                                        lineHeight = 23.sp
                                     ),
                                     ordered = androidx.compose.ui.text.TextStyle(
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp
+                                        fontSize = 15.sp,
+                                        lineHeight = 23.sp
                                     ),
                                     list = androidx.compose.ui.text.TextStyle(
-                                        fontSize = 14.sp,
-                                        lineHeight = 20.sp
+                                        fontSize = 15.sp,
+                                        lineHeight = 23.sp
                                     ),
                                     quote = androidx.compose.ui.text.TextStyle(
                                         fontSize = 13.sp,
@@ -509,26 +500,13 @@ private fun UserBubble(
 
 @Composable
 private fun AiAvatar() {
-    Box(
+    Image(
+        painter = androidx.compose.ui.res.painterResource(com.miloai.R.drawable.milo_logo),
+        contentDescription = "Milo AI",
         modifier = Modifier
-            .size(32.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Surface(
-            shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(32.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    "AI",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
-    }
+            .size(32.dp)
+            .clip(RoundedCornerShape(10.dp))
+    )
 }
 
 @Composable

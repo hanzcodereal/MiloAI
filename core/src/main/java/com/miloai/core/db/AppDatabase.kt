@@ -1,0 +1,357 @@
+package com.miloai.core.db
+
+import android.content.Context
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.room.Update
+import kotlinx.coroutines.flow.Flow
+
+@Entity(tableName = "conversations")
+data class ConversationEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val title: String,
+    val provider: String,
+    val model: String,
+    val mode: String,
+    val agentId: Long? = null,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+@Entity(tableName = "messages")
+data class MessageEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversationId: Long,
+    val role: String,
+    val content: String,
+    val toolCallsJson: String? = null,
+    val toolCallId: String? = null,
+    val toolName: String? = null,
+    val model: String? = null,
+    val mode: String? = null,
+    val status: String = "done",
+    val usageInput: Long = 0,
+    val usageOutput: Long = 0,
+    val attachmentsJson: String? = null,
+    val thinkingText: String? = null,
+    val thinkingSignature: String? = null,
+    val starred: Boolean = false,
+    val createdAt: Long
+)
+
+@Dao
+interface ConversationDao {
+    @Query("SELECT COUNT(*) FROM conversations")
+    suspend fun getAllCount(): Long
+
+    @Query("SELECT * FROM conversations ORDER BY pinned DESC, updatedAt DESC")
+    fun observeAll(): Flow<List<ConversationEntity>>
+
+    @Query("SELECT * FROM conversations WHERE archived = 0 ORDER BY pinned DESC, updatedAt DESC")
+    fun observeActive(): Flow<List<ConversationEntity>>
+
+    @Query("SELECT * FROM conversations WHERE archived = 1 ORDER BY updatedAt DESC")
+    fun observeArchived(): Flow<List<ConversationEntity>>
+
+    @Query("SELECT * FROM conversations WHERE id = :id")
+    fun observeById(id: Long): Flow<ConversationEntity?>
+
+    @Query("SELECT * FROM conversations WHERE id = :id")
+    suspend fun getById(id: Long): ConversationEntity?
+
+    @Insert
+    suspend fun insert(conversation: ConversationEntity): Long
+
+    @Update
+    suspend fun update(conversation: ConversationEntity)
+
+    @Query("UPDATE conversations SET pinned = :pinned, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updatePinned(id: Long, pinned: Boolean, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE conversations SET archived = :archived, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateArchived(id: Long, archived: Boolean, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM conversations WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId")
+    suspend fun deleteMessages(conversationId: Long)
+}
+
+@Dao
+interface MessageDao {
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
+    fun observeForConversation(conversationId: Long): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
+    suspend fun getForConversation(conversationId: Long): List<MessageEntity>
+
+    @Insert
+    suspend fun insert(message: MessageEntity): Long
+
+    @Update
+    suspend fun update(message: MessageEntity)
+
+    @Query("UPDATE messages SET content = :content WHERE id = :id")
+    suspend fun updateContent(id: Long, content: String)
+
+    @Query("SELECT DISTINCT conversationId FROM messages WHERE content LIKE '%' || :query || '%' ORDER BY conversationId DESC")
+    suspend fun searchConversationsByContent(query: String): List<Long>
+
+    @Query("UPDATE messages SET starred = :starred WHERE id = :id")
+    suspend fun updateStarred(id: Long, starred: Boolean)
+
+    @Query("SELECT * FROM messages WHERE starred = 1 ORDER BY id DESC")
+    fun observeStarred(): Flow<List<MessageEntity>>
+
+    @Query("SELECT conversationId, content FROM messages WHERE id IN (SELECT MAX(id) FROM messages GROUP BY conversationId)")
+    fun observeLastMessages(): Flow<List<LastMessageRow>>
+
+    @Query("SELECT COUNT(*) FROM messages WHERE role = 'USER'")
+    suspend fun countUserMessages(): Long
+
+    @Query("SELECT COUNT(*) FROM messages WHERE role = 'ASSISTANT'")
+    suspend fun countAssistantMessages(): Long
+
+    @Query("SELECT COALESCE(SUM(usageInput), 0) AS totalInput, COALESCE(SUM(usageOutput), 0) AS totalOutput FROM messages")
+    suspend fun tokenTotals(): TokenTotalsRow
+
+    @Query("SELECT COUNT(*) FROM messages WHERE role = 'ASSISTANT' AND toolCallsJson IS NOT NULL")
+    suspend fun countToolCallMessages(): Long
+
+    @Query("DELETE FROM messages WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id >= :fromId")
+    suspend fun deleteFrom(conversationId: Long, fromId: Long)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id >= :fromId AND id <= :toId")
+    suspend fun deleteRange(conversationId: Long, fromId: Long, toId: Long)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND toolCallId IN (:toolCallIds)")
+    suspend fun deleteByToolCallIds(conversationId: Long, toolCallIds: List<String>)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND starred = 0")
+    suspend fun deleteAllForConversation(conversationId: Long)
+}
+
+@Entity(tableName = "memories")
+data class MemoryEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversationId: Long,
+    val type: String,
+    val content: String,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+@Dao
+interface MemoryDao {
+    @Query("SELECT * FROM memories ORDER BY updatedAt DESC")
+    suspend fun observeAll(): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories WHERE conversationId = :conversationId AND type = 'memory' ORDER BY updatedAt DESC")
+    fun observeMemories(conversationId: Long): Flow<List<MemoryEntity>>
+
+    @Query("SELECT * FROM memories WHERE conversationId = :conversationId AND type = 'memory'")
+    suspend fun getMemories(conversationId: Long): List<MemoryEntity>
+
+    @Query("SELECT * FROM memories WHERE conversationId = :conversationId AND type = 'snapshot' ORDER BY createdAt DESC LIMIT 1")
+    suspend fun getLatestSnapshot(conversationId: Long): MemoryEntity?
+
+    @Insert
+    suspend fun insert(memory: MemoryEntity): Long
+
+    @Query("UPDATE memories SET content = :content, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateContent(id: Long, content: String, updatedAt: Long)
+
+    @Query("DELETE FROM memories WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("DELETE FROM memories WHERE conversationId = :conversationId")
+    suspend fun deleteForConversation(conversationId: Long)
+}
+
+@Entity(tableName = "agents")
+data class AgentEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val description: String = "",
+    val provider: String,
+    val baseUrl: String,
+    val apiKey: String,
+    val model: String,
+    val temperature: Double = 0.7,
+    val maxTokens: Int = 4096,
+    val reasoning: Boolean = true,
+    val systemPrompt: String = "",
+    val isDefault: Boolean = false,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+@Dao
+interface AgentDao {
+    @Query("SELECT * FROM agents ORDER BY isDefault DESC, createdAt ASC")
+    fun observeAll(): Flow<List<AgentEntity>>
+
+    @Query("SELECT * FROM agents WHERE id = :id")
+    suspend fun getById(id: Long): AgentEntity?
+
+    @Query("SELECT * FROM agents WHERE isDefault = 1 LIMIT 1")
+    suspend fun getDefault(): AgentEntity?
+
+    @Query("SELECT COUNT(*) FROM agents")
+    suspend fun count(): Long
+
+    @Insert
+    suspend fun insert(agent: AgentEntity): Long
+
+    @Update
+    suspend fun update(agent: AgentEntity)
+
+    @Query("UPDATE agents SET isDefault = 0")
+    suspend fun clearDefault()
+
+    @Query("UPDATE agents SET isDefault = 1 WHERE id = :id")
+    suspend fun setDefault(id: Long)
+
+    @Query("DELETE FROM agents WHERE id = :id")
+    suspend fun deleteById(id: Long)
+}
+
+data class LastMessageRow(
+    val conversationId: Long,
+    val content: String
+)
+
+data class TokenTotalsRow(
+    val totalInput: Long = 0,
+    val totalOutput: Long = 0
+)
+
+@Database(
+    entities = [ConversationEntity::class, MessageEntity::class, MemoryEntity::class, AgentEntity::class],
+    version = 11,
+    exportSchema = false
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun conversationDao(): ConversationDao
+    abstract fun messageDao(): MessageDao
+    abstract fun memoryDao(): MemoryDao
+    abstract fun agentDao(): AgentDao
+
+    companion object {
+        @Volatile
+        private var instance: AppDatabase? = null
+
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN usageInput INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN usageOutput INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN attachmentsJson TEXT")
+            }
+        }
+
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN thinkingText TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN thinkingSignature TEXT")
+            }
+        }
+
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN starred INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS repeat_tasks (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "title TEXT NOT NULL, content TEXT NOT NULL, interval TEXT NOT NULL, " +
+                        "time TEXT NOT NULL, weekday INTEGER NOT NULL, everyHours INTEGER NOT NULL, " +
+                        "requestCode INTEGER NOT NULL, nextTriggerAt INTEGER NOT NULL, createdAt INTEGER NOT NULL)"
+                )
+            }
+        }
+
+        val MIGRATION_8_9 = object : androidx.room.migration.Migration(8, 9) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS memories (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "conversationId INTEGER NOT NULL, type TEXT NOT NULL, content TEXT NOT NULL, " +
+                        "createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)"
+                )
+            }
+        }
+
+        val MIGRATION_9_10 = object : androidx.room.migration.Migration(9, 10) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN agentId INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS agents (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "name TEXT NOT NULL, description TEXT NOT NULL, " +
+                        "provider TEXT NOT NULL, baseUrl TEXT NOT NULL, apiKey TEXT NOT NULL, " +
+                        "model TEXT NOT NULL, temperature REAL NOT NULL, maxTokens INTEGER NOT NULL, " +
+                        "reasoning INTEGER NOT NULL, systemPrompt TEXT NOT NULL, " +
+                        "isDefault INTEGER NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)"
+                )
+            }
+        }
+
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS automations (" +
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "name TEXT NOT NULL, triggerType TEXT NOT NULL, triggerValue TEXT NOT NULL, " +
+                        "days TEXT NOT NULL, actionsJson TEXT NOT NULL, " +
+                        "enabled INTEGER NOT NULL, lastRunAt INTEGER NOT NULL, createdAt INTEGER NOT NULL)"
+                )
+            }
+        }
+
+        val MIGRATION_10_11 = object : androidx.room.migration.Migration(10, 11) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS repeat_tasks")
+                db.execSQL("DROP TABLE IF EXISTS automations")
+            }
+        }
+
+        fun get(context: Context): AppDatabase =
+            instance ?: synchronized(this) {
+                instance ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "miloai.db")
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                        MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11
+                    )
+                    .build()
+                    .also { instance = it }
+            }
+    }
+}
